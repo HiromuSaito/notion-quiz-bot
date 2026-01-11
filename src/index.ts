@@ -1,6 +1,8 @@
 import "dotenv/config";
 import { fetchRecentNotes } from "./clients/notion";
 import { generateQuiz } from "./clients/gemini";
+import { sendQuizToLine } from "./clients/line";
+import { Quiz } from "./types";
 
 async function main() {
   console.log("Notion Quiz Bot - テスト実行");
@@ -28,7 +30,7 @@ async function main() {
 
   console.log(`生成された問題数: ${questions.length}問\n`);
 
-  // 4. クイズを表示
+  // 4. クイズをコンソールに表示
   for (let i = 0; i < questions.length; i++) {
     const q = questions[i];
     console.log("--------------------------------");
@@ -41,6 +43,16 @@ async function main() {
     console.log(`  解説: ${q.explanation}`);
     console.log("--------------------------------\n");
   }
+
+  // 5. LINEに送信
+  console.log("LINEに送信中...\n");
+  const quiz: Quiz = {
+    noteTitle: targetNote.title,
+    questions,
+  };
+  await sendQuizToLine(quiz);
+
+  console.log("送信完了！");
 }
 
 main().catch(console.error);
