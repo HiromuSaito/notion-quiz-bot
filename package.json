@@ -1,0 +1,22 @@
+{
+  "name": "notion-quiz-bot",
+  "version": "1.0.0",
+  "description": "Notionの学習ノートから自動でクイズを生成しLINEに配信するボット",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "@line/bot-sdk": "^9.0.0",
+    "@notionhq/client": "^2.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0"
+  }
+}
