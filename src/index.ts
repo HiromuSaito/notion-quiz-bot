@@ -1,38 +1,24 @@
 import "dotenv/config";
-import { fetchRecentNotes } from "./clients/notion";
-import { generateQuiz } from "./clients/gemini";
+import { generateQuizFromRecentNotes } from "./services/quizGenerator";
 import { sendQuizToLine } from "./clients/line";
-import { Quiz } from "./types";
 
 async function main() {
   console.log("Notion Quiz Bot - テスト実行");
   console.log("================================\n");
 
-  // 1. 過去7日間に更新されたノートを取得
-  console.log("過去7日間のノートを取得中...\n");
-  const notes = await fetchRecentNotes({ days: 7 });
-
-  console.log(`取得件数: ${notes.length}件\n`);
-
-  if (notes.length === 0) {
-    console.log("ノートが見つかりませんでした。");
-    return;
-  }
-
-  // 2. ランダムに1つ選択
-  const targetNote = notes[Math.floor(Math.random() * notes.length)];
-  console.log(`選択されたノート: ${targetNote.title}`);
-  console.log(`内容:\n${targetNote.content.slice(0, 300)}...\n`);
-
-  // 3. Gemini APIでクイズ生成（テスト用に3問）
+  // 1. 最近のノートからクイズを生成（テスト用に3問）
   console.log("クイズを生成中...\n");
-  const questions = await generateQuiz(targetNote.content, 3);
+  const quiz = await generateQuizFromRecentNotes({
+    days: 7,
+    questionCount: 3,
+  });
 
-  console.log(`生成された問題数: ${questions.length}問\n`);
+  console.log(`テーマ: ${quiz.noteTitle}`);
+  console.log(`生成された問題数: ${quiz.questions.length}問\n`);
 
-  // 4. クイズをコンソールに表示
-  for (let i = 0; i < questions.length; i++) {
-    const q = questions[i];
+  // 2. クイズをコンソールに表示
+  for (let i = 0; i < quiz.questions.length; i++) {
+    const q = quiz.questions[i];
     console.log("--------------------------------");
     console.log(`Q${i + 1}. ${q.question}\n`);
     console.log(`  A) ${q.choices[0]}`);
@@ -44,12 +30,8 @@ async function main() {
     console.log("--------------------------------\n");
   }
 
-  // 5. LINEに送信
+  // 3. LINEに送信
   console.log("LINEに送信中...\n");
-  const quiz: Quiz = {
-    noteTitle: targetNote.title,
-    questions,
-  };
   await sendQuizToLine(quiz);
 
   console.log("送信完了！");
