@@ -4,58 +4,195 @@ import {
   PageObjectResponse,
   RichTextItemResponse,
 } from "@notionhq/client/build/src/api-endpoints";
-import { NotionNote } from "../types";
+
+if (!process.env.NOTION_API_KEY) {
+  throw new Error("NOTION_API_KEY is not set");
+}
+
+if (!process.env.NOTION_DATABASE_ID) {
+  throw new Error("NOTION_DATABASE_ID is not set");
+}
 
 const notion = new Client({
   auth: process.env.NOTION_API_KEY,
 });
 
-const databaseId = process.env.NOTION_DATABASE_ID!;
+const databaseId = process.env.NOTION_DATABASE_ID;
 
 /**
- * 過去N日間に更新されたノートを取得
+ * 指定した日付範囲のコンテンツを取得
+ * @param startDate 開始日（この日を含む）
+ * @param endDate 終了日（この日を含む）
  */
-export async function fetchRecentNotes(options: {
-  days: number;
-}): Promise<NotionNote[]> {
-  const { days } = options;
+export async function fetchContentByDateRange(
+  startDate: Date,
+  endDate: Date
+): Promise<string> {
+  // 対象となる月のページタイトルを取得（YYYY-MM形式）
+  const monthTitles = getMonthTitlesBetween(startDate, endDate);
 
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - days);
+  const allContent: string[] = [];
 
+  for (const monthTitle of monthTitles) {
+    const page = await fetchPageByTitle(monthTitle);
+    if (!page) {
+      console.log(`ページが見つかりません: ${monthTitle}`);
+      continue;
+    }
+
+    const content = await fetchContentFromPageByDateRange(page.id, startDate, endDate);
+    if (content) {
+      allContent.push(content);
+    }
+  }
+
+  return allContent.join("\n\n");
+}
+
+/**
+ * 開始日と終了日の間の月タイトル（YYYY-MM形式）を取得
+ */
+function getMonthTitlesBetween(startDate: Date, endDate: Date): string[] {
+  const titles: string[] = [];
+  const current = new Date(startDate);
+
+  while (current <= endDate) {
+    const year = current.getFullYear();
+    const month = current.getMonth() + 1;
+    const title = `${year}-${String(month).padStart(2, "0")}`;
+
+    if (!titles.includes(title)) {
+      titles.push(title);
+    }
+
+    // 次の月へ
+    current.setMonth(current.getMonth() + 1);
+    current.setDate(1);
+  }
+
+  return titles;
+}
+
+/**
+ * タイトルでページを検索
+ */
+async function fetchPageByTitle(title: string): Promise<PageObjectResponse | null> {
   const response = await notion.databases.query({
     database_id: databaseId,
     filter: {
-      timestamp: "last_edited_time",
-      last_edited_time: {
-        on_or_after: cutoffDate.toISOString(),
+      property: "Name",
+      title: {
+        equals: title,
       },
     },
-    sorts: [
-      {
-        timestamp: "last_edited_time",
-        direction: "descending",
-      },
-    ],
   });
 
-  const notes: NotionNote[] = [];
-
-  for (const page of response.results) {
-    if (!isFullPage(page)) continue;
-
-    const title = extractPageTitle(page);
-    const content = await fetchPageContent(page.id);
-
-    notes.push({
-      id: page.id,
-      title,
-      content,
-      lastEdited: new Date(page.last_edited_time),
-    });
+  if (response.results.length === 0) {
+    return null;
   }
 
-  return notes;
+  const page = response.results[0];
+  if (!isFullPage(page)) {
+    return null;
+  }
+
+  return page;
+}
+
+/**
+ * ページ内の日付見出しから指定範囲のコンテンツを取得
+ */
+async function fetchContentFromPageByDateRange(
+  pageId: string,
+  startDate: Date,
+  endDate: Date
+): Promise<string> {
+  const blocks = await fetchTopLevelBlocks(pageId);
+  const contentParts: string[] = [];
+
+  for (const block of blocks) {
+    // heading_1ブロックから日付を抽出
+    if (block.type === "heading_1") {
+      const headingText = richTextToPlainText(block.heading_1.rich_text);
+      const date = parseDateFromHeading(headingText);
+
+      if (date && isDateInRange(date, startDate, endDate)) {
+        // 見出しテキストを追加
+        contentParts.push(`# ${headingText}`);
+
+        // 子ブロックがある場合は取得
+        if (block.has_children) {
+          const children = await fetchAllBlocks(block.id);
+          const childContent = extractTextFromBlocks(children);
+          if (childContent) {
+            contentParts.push(childContent);
+          }
+        }
+      }
+    }
+  }
+
+  return contentParts.join("\n\n");
+}
+
+/**
+ * トップレベルのブロックのみを取得（子ブロックは取得しない）
+ */
+async function fetchTopLevelBlocks(blockId: string): Promise<BlockObjectResponse[]> {
+  const blocks: BlockObjectResponse[] = [];
+
+  let cursor: string | undefined;
+  do {
+    const response = await notion.blocks.children.list({
+      block_id: blockId,
+      start_cursor: cursor,
+    });
+
+    for (const block of response.results) {
+      if (!isFullBlock(block)) continue;
+      blocks.push(block);
+    }
+
+    cursor = response.has_more ? response.next_cursor ?? undefined : undefined;
+  } while (cursor);
+
+  return blocks;
+}
+
+/**
+ * 見出しテキストから日付をパース（YYYY-MM-DD形式）
+ */
+function parseDateFromHeading(text: string): Date | null {
+  // YYYY-MM-DD形式にマッチ
+  const match = text.match(/(\d{4}-\d{2}-\d{2})/);
+  if (!match) {
+    return null;
+  }
+
+  const date = new Date(match[1]);
+  if (isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date;
+}
+
+/**
+ * 日付が範囲内かどうかを判定
+ */
+function isDateInRange(date: Date, startDate: Date, endDate: Date): boolean {
+  const d = normalizeDate(date);
+  const start = normalizeDate(startDate);
+  const end = normalizeDate(endDate);
+
+  return d >= start && d <= end;
+}
+
+/**
+ * 日付を正規化（時刻部分を除去）
+ */
+function normalizeDate(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
 /**
@@ -63,30 +200,6 @@ export async function fetchRecentNotes(options: {
  */
 function isFullPage(page: unknown): page is PageObjectResponse {
   return (page as PageObjectResponse).object === "page" && "properties" in (page as PageObjectResponse);
-}
-
-/**
- * ページタイトルを抽出
- */
-function extractPageTitle(page: PageObjectResponse): string {
-  const properties = page.properties;
-
-  for (const key of Object.keys(properties)) {
-    const prop = properties[key];
-    if (prop.type === "title" && prop.title.length > 0) {
-      return prop.title.map((t) => t.plain_text).join("");
-    }
-  }
-
-  return "無題";
-}
-
-/**
- * ページ内のブロックからコンテンツを取得
- */
-async function fetchPageContent(pageId: string): Promise<string> {
-  const blocks = await fetchAllBlocks(pageId);
-  return extractTextFromBlocks(blocks);
 }
 
 /**
